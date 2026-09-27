@@ -1,23 +1,21 @@
-# Template
-This is where she makes a mod.
+# Vertex
 
-<img src="logo.png" width="150" alt="the mod's logo" />
+Vertex is a Geometry Dash 2.2 Geode mod with a Dear ImGui control surface. The menu is opened with `Tab`; category panels and the HUD are independently draggable.
 
-*Update logo.png to change your mod's icon (please)*
+## Build
 
-## Getting started
-We recommend heading over to [the getting started section on our docs](https://docs.geode-sdk.org/getting-started/) for useful info on what to do next.
+Install the Geode SDK and set `GEODE_SDK` to its checkout, then build with the Geode CLI:
 
-## Build instructions
-For more info, see [our docs](https://docs.geode-sdk.org/getting-started/create-mod#build)
 ```sh
-# Assuming you have the Geode CLI set up already
 geode build
 ```
 
-# Resources
-* [Geode SDK Documentation](https://docs.geode-sdk.org/)
-* [Geode SDK Source Code](https://github.com/geode-sdk/geode/)
-* [Geode CLI](https://github.com/geode-sdk/cli)
-* [Bindings](https://github.com/geode-sdk/bindings/)
-* [Dev Tools](https://github.com/geode-sdk/DevTools)
+The CMake project fetches Dear ImGui `1.92.4-docking` with CPM and compiles the renderer into the mod. The target binding is GD `2.2081` on desktop and mobile.
+
+## Layout
+
+- `src/Menu.*` contains only ImGui presentation and persistent toggle editing.
+- `src/ImGuiLayer.*` owns the Cocos2d/OpenGL Dear ImGui backend and Tab/input bridge.
+- `src/ModState.*` owns Geode-saved settings, CPS timestamps, session time, and best-run state.
+- `src/main.cpp` contains the Player and PlayLayer hitbox hooks.
+- `src/Hooks.cpp` contains Bypass, Creator/Editor, and rendering hooks.

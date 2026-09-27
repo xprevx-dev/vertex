@@ -1,100 +1,201 @@
 /**
- * Include the Geode headers.
+ * Vertex entry point and the first, high-risk hooks.
+ *
+ * This source targets the Geode 2.2.0 / GD 2.2081 binding set.  The numeric
+ * addresses shown in the comments are the Windows addresses from the public
+ * Geode bindings; Geode resolves the platform-specific address at load time,
+ * so this mod never hard-codes an RVA in its own binary.
  */
 #include <Geode/Geode.hpp>
+#include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/PlayLayer.hpp>
 
-/**
- * Brings cocos2d and all Geode namespaces to the current scope.
- */
+#include "ModState.hpp"
+
 using namespace geode::prelude;
+using namespace cocos2d;
+
+namespace vertex {
+
+namespace {
+    bool isHazard(GameObject* object) {
+        if (!object) {
+            return false;
+        }
+        auto type = object->getType();
+        return type == GameObjectType::Hazard ||
+               type == GameObjectType::AnimatedHazard ||
+               (type == GameObjectType::Slope && object->m_slopeIsHazard);
+    }
+
+    void drawBox(CCRect rect, ccColor4B outline, ccColor4F fill) {
+        CCPoint points[4] = {
+            ccp(rect.getMinX(), rect.getMinY()),
+            ccp(rect.getMaxX(), rect.getMinY()),
+            ccp(rect.getMaxX(), rect.getMaxY()),
+            ccp(rect.getMinX(), rect.getMaxY()),
+        };
+
+        // Cocos2d's immediate primitives are used after PlayLayer::draw, so
+        // the overlay remains in the same world transform as gameplay.  The
+        // translucent fill is drawn first and the one-pixel outline second.
+        ccDrawSolidPoly(points, 4, fill);
+        ccDrawColor4B(outline.r, outline.g, outline.b, outline.a);
+        ccDrawPoly(points, 4, true);
+    }
+
+    void drawHitboxes(PlayLayer* layer) {
+        if (!layer || !ModState::get().enabled(Feature::ShowHitboxes)) {
+            return;
+        }
+
+        if (layer->m_player1) {
+            drawBox(
+                layer->m_player1->getBoundingBox(),
+                ccc4(67, 157, 255, 255),
+                ccc4f(0.26f, 0.62f, 1.f, 0.16f)
+            );
+        }
+        if (layer->m_player2) {
+            drawBox(
+                layer->m_player2->getBoundingBox(),
+                ccc4(67, 157, 255, 255),
+                ccc4f(0.26f, 0.62f, 1.f, 0.16f)
+            );
+        }
+
+        // In 2.2 the gameplay object list is GJBaseGameLayer::m_objects.
+        // GameObject::getBoundingBox() includes the current object transform,
+        // while getType() distinguishes the hazard/solid outline colors.
+        CCObject* raw = nullptr;
+        if (!layer->m_objects) {
+            return;
+        }
+        CCARRAY_FOREACH(layer->m_objects, raw) {
+            auto* object = static_cast<GameObject*>(raw);
+            if (!object || object->m_isInvisible || object->isTrigger()) {
+                continue;
+            }
+            if (isHazard(object)) {
+                drawBox(
+                    object->getBoundingBox(),
+                    ccc4(225, 92, 92, 255),
+                    ccc4f(0.88f, 0.36f, 0.36f, 0.10f)
+                );
+            } else if (object->getType() == GameObjectType::Solid ||
+                       object->getType() == GameObjectType::Breakable ||
+                       object->getType() == GameObjectType::Slope) {
+                drawBox(
+                    object->getBoundingBox(),
+                    ccc4(210, 210, 210, 230),
+                    ccc4f(0.82f, 0.82f, 0.82f, 0.035f)
+                );
+            }
+        }
+    }
+}
 
 /**
- * `$modify` lets you extend and modify GD's classes.
- * To hook a function in Geode, simply $modify the class
- * and write a new function definition with the signature of
- * the function you want to hook.
+ * Player hooks.  In the 2.2081 bindings:
+ *  - PlayLayer::destroyPlayer(PlayerObject*, GameObject*) is the virtual at
+ *    Windows 0x3B39D0.
+ *  - GJBaseGameLayer::checkCollisions(PlayerObject*, float, bool) is the
+ *    collision pass at Windows 0x2137F0. Older examples call this method
+ *    collisionChecks; the 2.2 binding name is checkCollisions.
+ *  - PlayLayer::toggleMusicInPractice() is Windows 0x3B2900.
+ *  - PlayLayer::resetLevel() is Windows 0x3B8EB0.
+ *  - PlayLayer::keyDown(enumKeyCodes, double) is Windows 0x3CBE40.
  *
- * Here we use the overloaded `$modify` macro to set our own class name,
- * so that we can use it for button callbacks.
- *
- * Notice the header being included, you *must* include the header for
- * the class you are modifying, or you will get a compile error.
- *
- * Another way you could do this is like this:
- *
- * struct MyMenuLayer : Modify<MyMenuLayer, MenuLayer> {};
+ * Using the generated signatures is safer than copying these addresses: the
+ * same class resolves to different addresses on macOS, Android, and iOS.
  */
-#include <Geode/modify/MenuLayer.hpp>
-class $modify(MyMenuLayer, MenuLayer) {
-	/**
-	 * Typically classes in GD are initialized using the `init` function, (though not always!),
-	 * so here we use it to add our own button to the bottom menu.
-	 *
-	 * Note that for all hooks, your signature has to *match exactly*,
-	 * `void init()` would not place a hook!
-	*/
-	bool init() {
-		/**
-		 * We call the original init function so that the
-		 * original class is properly initialized.
-		 */
-		if (!MenuLayer::init()) {
-			return false;
-		}
+class $modify(VertexPlayLayerPlayerHooks, PlayLayer) {
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) {
+            return false;
+        }
+        ModState::get().beginLevel();
+        return true;
+    }
 
-		/**
-		 * You can use methods from the `geode::log` namespace to log messages to the console,
-		 * being useful for debugging and such. See this page for more info about logging:
-		 * https://docs.geode-sdk.org/tutorials/logging
-		*/
-		log::debug("Hello from my MenuLayer::init hook! This layer has {} children.", this->getChildrenCount());
+    void destroyPlayer(PlayerObject* player, GameObject* object) {
+        auto& state = ModState::get();
+        if (state.enabled(Feature::Noclip)) {
+            // Skipping this virtual prevents the death transition, particles,
+            // and delayed reset from being scheduled for the active player.
+            if (player) {
+                player->resetStateVariables();
+            }
+            return;
+        }
 
-		/**
-		 * See this page for more info about buttons
-		 * https://docs.geode-sdk.org/tutorials/buttons
-		*/
-		auto myButton = CCMenuItemSpriteExtra::create(
-			CCSprite::createWithSpriteFrameName("GJ_likeBtn_001.png"),
-			this,
-			/**
-			 * Here we use the name we set earlier for our modify class.
-			*/
-			menu_selector(MyMenuLayer::onMyButton)
-		);
+        if (state.enabled(Feature::InstantRespawn)) {
+            // The normal implementation starts a death animation and later
+            // invokes resetLevel. Calling the bound reset path directly removes
+            // that delay while retaining GD's own checkpoint bookkeeping.
+            this->resetLevel();
+            return;
+        }
 
-		/**
-		 * Here we access the `bottom-menu` node by its ID, and add our button to it.
-		 * Node IDs are a Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/nodetree
-		*/
-		auto menu = this->getChildByID("bottom-menu");
-		menu->addChild(myButton);
+        PlayLayer::destroyPlayer(player, object);
+    }
 
-		/**
-		 * The `_spr` string literal operator just prefixes the string with
-		 * your mod id followed by a slash. This is good practice for setting your own node ids.
-		*/
-		myButton->setID("my-button"_spr);
+    void toggleMusicInPractice() {
+        if (ModState::get().enabled(Feature::PracticeMusic)) {
+            // This is exactly the 2.2 practice-mode switch point. Returning
+            // here leaves the active normal-level FMOD channel untouched.
+            return;
+        }
+        PlayLayer::toggleMusicInPractice();
+    }
 
-		/**
-		 * We update the layout of the menu to ensure that our button is properly placed.
-		 * This is yet another Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/layouts
-		*/
-		menu->updateLayout();
+    void keyDown(enumKeyCodes key, double timestamp) {
+        if (ModState::get().enabled(Feature::IgnoreEsc) && key == KEY_Escape) {
+            return;
+        }
+        PlayLayer::keyDown(key, timestamp);
+    }
 
-		/**
-		 * We return `true` to indicate that the class was properly initialized.
-		 */
-		return true;
-	}
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+        if (this->isGameplayActive()) {
+            ModState::get().updateBestPercent(this->getCurrentPercent());
+        }
+    }
 
-	/**
-	 * This is the callback function for the button we created earlier.
-	 * The signature for button callbacks must always be the same,
-	 * return type `void` and taking a `CCObject*`.
-	*/
-	void onMyButton(CCObject*) {
-		FLAlertLayer::create("Geode", "Hello from my custom mod!", "OK")->show();
-	}
+    bool pushButton(PlayerButton button) {
+        bool result = PlayLayer::pushButton(button);
+        if (result) {
+            ModState::get().recordPress();
+        }
+        return result;
+    }
+
+    bool releaseButton(PlayerButton button) {
+        bool result = PlayLayer::releaseButton(button);
+        ModState::get().recordRelease();
+        return result;
+    }
+
+    void draw() {
+        PlayLayer::draw();
+        drawHitboxes(this);
+    }
 };
+
+/**
+ * Current GD 2.2 does not expose a PlayLayer::collisionChecks symbol.  The
+ * generated class moved the operation into GJBaseGameLayer::checkCollisions.
+ * This hook is the equivalent collision early-return and is kept separate so
+ * it composes with other PlayLayer hooks above.
+ */
+class $modify(VertexCollisionHooks, GJBaseGameLayer) {
+    int checkCollisions(PlayerObject* player, float dt, bool ignoreDamage) {
+        if (ModState::get().enabled(Feature::Noclip)) {
+            return 0;
+        }
+        return GJBaseGameLayer::checkCollisions(player, dt, ignoreDamage);
+    }
+};
+
+} // namespace vertex
