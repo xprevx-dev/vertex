@@ -1,100 +1,85 @@
-/**
- * Include the Geode headers.
- */
-#include <Geode/Geode.hpp>
+#include <Geode/modify/PauseLayer.hpp>
+#include <Geode/modify/PlayerObject.hpp>
+#include <Geode/ui/Popup.hpp>
 
-/**
- * Brings cocos2d and all Geode namespaces to the current scope.
- */
 using namespace geode::prelude;
 
-/**
- * `$modify` lets you extend and modify GD's classes.
- * To hook a function in Geode, simply $modify the class
- * and write a new function definition with the signature of
- * the function you want to hook.
- *
- * Here we use the overloaded `$modify` macro to set our own class name,
- * so that we can use it for button callbacks.
- *
- * Notice the header being included, you *must* include the header for
- * the class you are modifying, or you will get a compile error.
- *
- * Another way you could do this is like this:
- *
- * struct MyMenuLayer : Modify<MyMenuLayer, MenuLayer> {};
- */
-#include <Geode/modify/MenuLayer.hpp>
-class $modify(MyMenuLayer, MenuLayer) {
-	/**
-	 * Typically classes in GD are initialized using the `init` function, (though not always!),
-	 * so here we use it to add our own button to the bottom menu.
-	 *
-	 * Note that for all hooks, your signature has to *match exactly*,
-	 * `void init()` would not place a hook!
-	*/
-	bool init() {
-		/**
-		 * We call the original init function so that the
-		 * original class is properly initialized.
-		 */
-		if (!MenuLayer::init()) {
-			return false;
-		}
+// Central place for all Vertex feature toggle state. Add one bool per feature as we go.
+struct VertexState {
+    static inline bool noclip = false;
+};
 
-		/**
-		 * You can use methods from the `geode::log` namespace to log messages to the console,
-		 * being useful for debugging and such. See this page for more info about logging:
-		 * https://docs.geode-sdk.org/tutorials/logging
-		*/
-		log::debug("Hello from my MenuLayer::init hook! This layer has {} children.", this->getChildrenCount());
+class VertexMenuPopup : public geode::Popup<> {
+protected:
+    bool setup() override {
+        this->setTitle("Vertex");
 
-		/**
-		 * See this page for more info about buttons
-		 * https://docs.geode-sdk.org/tutorials/buttons
-		*/
-		auto myButton = CCMenuItemSpriteExtra::create(
-			CCSprite::createWithSpriteFrameName("GJ_likeBtn_001.png"),
-			this,
-			/**
-			 * Here we use the name we set earlier for our modify class.
-			*/
-			menu_selector(MyMenuLayer::onMyButton)
-		);
+        auto noclipToggle = CCMenuItemToggler::createWithStandardSprites(
+            this,
+            menu_selector(VertexMenuPopup::onNoclip),
+            0.7f
+        );
+        noclipToggle->toggle(VertexState::noclip);
+        noclipToggle->setPosition(-70.f, 0.f);
+        m_buttonMenu->addChild(noclipToggle);
 
-		/**
-		 * Here we access the `bottom-menu` node by its ID, and add our button to it.
-		 * Node IDs are a Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/nodetree
-		*/
-		auto menu = this->getChildByID("bottom-menu");
-		menu->addChild(myButton);
+        auto label = CCLabelBMFont::create("Noclip", "bigFont.fnt");
+        label->setScale(0.4f);
+        label->setAnchorPoint({ 0.f, 0.5f });
+        label->setPosition(-45.f, 0.f);
+        m_mainLayer->addChild(label);
 
-		/**
-		 * The `_spr` string literal operator just prefixes the string with
-		 * your mod id followed by a slash. This is good practice for setting your own node ids.
-		*/
-		myButton->setID("my-button"_spr);
+        return true;
+    }
 
-		/**
-		 * We update the layout of the menu to ensure that our button is properly placed.
-		 * This is yet another Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/layouts
-		*/
-		menu->updateLayout();
+    void onNoclip(CCObject* sender) {
+        auto toggler = static_cast<CCMenuItemToggler*>(sender);
+        VertexState::noclip = toggler->isToggled();
+    }
 
-		/**
-		 * We return `true` to indicate that the class was properly initialized.
-		 */
-		return true;
-	}
+public:
+    static VertexMenuPopup* create() {
+        auto ret = new VertexMenuPopup();
+        if (ret->initAnchored(240.f, 160.f)) {
+            ret->autorelease();
+            return ret;
+        }
+        delete ret;
+        return nullptr;
+    }
+};
 
-	/**
-	 * This is the callback function for the button we created earlier.
-	 * The signature for button callbacks must always be the same,
-	 * return type `void` and taking a `CCObject*`.
-	*/
-	void onMyButton(CCObject*) {
-		FLAlertLayer::create("Geode", "Hello from my custom mod!", "OK")->show();
-	}
+class $modify(PauseLayer) {
+    void customSetup() {
+        PauseLayer::customSetup();
+
+        auto menu = this->getChildByID("left-button-menu");
+        if (!menu) return;
+
+        auto sprite = CCSprite::createWithSpriteFrameName("GJ_optionsBtn_001.png");
+        sprite->setScale(0.9f);
+
+        auto btn = CCMenuItemSpriteExtra::create(
+            sprite,
+            this,
+            menu_selector(PauseLayer::onVertexMenu)
+        );
+        btn->setID("vertex-menu-button"_spr);
+        menu->addChild(btn);
+        menu->updateLayout();
+    }
+
+    void onVertexMenu(CCObject*) {
+        VertexMenuPopup::create()->show();
+    }
+};
+
+// First real feature: noclip. Skips all player collision resolution while enabled.
+class $modify(PlayerObject) {
+    bool checkCollisions(GJBaseGameLayer* layer, float dt) {
+        if (VertexState::noclip) {
+            return true;
+        }
+        return PlayerObject::checkCollisions(layer, dt);
+    }
 };
